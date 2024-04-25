@@ -60,7 +60,7 @@ extern "C" void const_conv_wrap(float* A,float *B, int ylen,int width, int heigh
 }
 
 
-void cpu_convolve(float *A, float *B, float *H, int hlen, int ylen, int width, int height) {
+void cpu_convolve(float *A, float *B, float *H, int hlen, int ylen, int width, int height,int lb=0,int span=0) {
   for (int r = 0; r < width; r++) {
     for (int i = 0; i < height; i++) {
       float sum = 0.0f;
@@ -73,9 +73,9 @@ void cpu_convolve(float *A, float *B, float *H, int hlen, int ylen, int width, i
   }
 }
 
-float dataloader(float* buffer) {
+float dataloader(char* filename, float** buf) {
   // Open the binary file for reading
-  std::ifstream file("frames.bin", std::ios::binary);
+  std::ifstream file(filename, std::ios::binary);
   if (!file.is_open()) {
       std::cerr << "Failed to open file." << std::endl;
       return 1;
@@ -88,18 +88,18 @@ float dataloader(float* buffer) {
 
   // Calculate the size of each array
   std::streampos arraySize = fileSize / 600;
-  buffer = (float *)malloc(fileSize * sizeof(float));
+  float* buffer = (float *)malloc(fileSize * sizeof(float));
   // Read the file into 600 arrays
   std::vector<std::vector<char>> arrays(600);
-  char* buf = (char*)malloc((int)arraySize*sizeof(char));
+  char* cbuf = (char*)malloc((int)arraySize*sizeof(char));
   for (int i = 0; i < 600; ++i) {
       // Resize the vector to hold the data for one array
       // std::cout << arraySize << std::endl;
       // arrays[i].resize(arraySize);
       // Read data into the vector
-      file.read(buf,arraySize);
+      file.read(cbuf,arraySize);
       for (int x = 0; x < arraySize; x++)
-        buffer[i * arraySize+x] = (float)buf[x];
+        buffer[i * arraySize+x] = (float)cbuf[x];
       // file.read(arrays[i].data(), arraySize);
       // Check for errors
       if (file.bad()) {
@@ -107,43 +107,55 @@ float dataloader(float* buffer) {
           return 1;
       }
   }
-  free(buf);
+  free(cbuf);
 
   // Close the file
   file.close();
+  *buf = buffer;
   return fileSize;
 
 }
 
 int datawriter(float* buffer, float bufferSize) {
-    // Open the binary file for writing
-    std::ofstream file("output.bin", std::ios::binary);
-    if (!file.is_open()) {
-        std::cerr << "Failed to open file." << std::endl;
-        return 1;
-    }
+      // Open the binary file for writing
+  // Open the binary file for writing
+  std::ofstream file("output.bin", std::ios::binary);
+  if (!file.is_open()) {
+      std::cerr << "Failed to open file." << std::endl;
+      free(buffer); // Clean up
+      return 1;
+  }
 
-    // Write the buffer to the file
-    file.write(reinterpret_cast<const char*>(buffer), bufferSize * sizeof(float));
-    if (!file.good()) {
-        std::cerr << "Error writing to file." << std::endl;
-        return 1;
-    }
+  // Write the buffer to the file
+  file.write(reinterpret_cast<const char*>(buffer), bufferSize * sizeof(float));
+  if (!file.good()) {
+      std::cerr << "Error writing to file." << std::endl;
+      free(buffer); // Clean up
+      return 1;
+  }
 
-    // Close the file
-    file.close();
+  // Close the file
+  file.close();
 
-    std::cout << "File written successfully." << std::endl;
-    return 0;
+  std::cout << "File written successfully." << std::endl;
+
+  // Clean up
+  free(buffer);
+
+  return 0;
+
 }
 
 int main(int argc, char** argv) {
   float* databuf = NULL;
-  float bytes = dataloader(databuf);
+  float bytes = dataloader(argv[1],&databuf);
   int count = bytes / (640*400);
   printf("%.2f",bytes);
-  free(databuf);
-  return 0;
+  // datawriter(databuf,bytes);
+  // free(databuf);
+  // return 0;
+  // free(databuf);
+  // return 0;
   StopWatchInterface *hTimer = NULL;
   // Use command-line specified CUDA device, otherwise use device with highest
   // Gflops/s
@@ -204,9 +216,9 @@ int main(int argc, char** argv) {
   checkCudaErrors(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking));
   checkCudaErrors(cudaStreamSynchronize(stream));
   checkCudaErrors(cudaEventRecord(start, stream));
-  float* output_buffer = (float *)calloc(0,bytes * sizeof(float));
+  float* output_buffer = (float *)malloc(bytes * sizeof(float));
   for (int i = 0; i < count; i++) {
-    cudaMemcpy(A_gpu, &databuf[i * ylen], w * h * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(A_gpu, &(databuf[i * ylen]), w * h * sizeof(float), cudaMemcpyHostToDevice);
       
     // return 0;
     // setConvolutionKernel(gaussian);
@@ -236,7 +248,7 @@ int main(int argc, char** argv) {
         A_gpu = B_gpu;
         B_gpu = hold;
     }
-
+    cudaDeviceSynchronize();
     // checkCudaErrors(cudaDeviceSynchronize());
     // sdkResetTimer(&hTimer);
     // sdkStartTimer(&hTimer);
@@ -245,10 +257,10 @@ int main(int argc, char** argv) {
     // sdkGetTimerValue(&hTimer);
     // printf("CPU Convolve: %.5fmsec\n",(float)sdkGetTimerValue(&hTimer));
 
-    cudaMemcpy(&output_buffer[(i * ylen)], B_gpu, w * h * sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(&output_buffer[i * ylen], B_gpu, w * h * sizeof(float), cudaMemcpyDeviceToHost);
   }
   datawriter(output_buffer, bytes);
-  free(output_buffer);
+  // free(output_buffer);
   free(databuf);
     // const_conv_wrap(A_gpu,B_gpu,ylen,w,h);
   // Record the stop event
@@ -260,7 +272,7 @@ int main(int argc, char** argv) {
   checkCudaErrors(cudaEventElapsedTime(&msecTotal, start, stop));
   // Compute and print the performance
   int iter = 1;
-  float msecPerMatrixMul = msecTotal/iter;
+  float msecPerMatrixMul = msecTotal/(iter*20);
   double flopsPerMatrixMul = 2.0 * static_cast<double>(w) *
                             static_cast<double>(h) * static_cast<double>(20) * iter;
   double gigaFlops =
