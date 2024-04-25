@@ -7,58 +7,7 @@
 #include <iostream>
 #include <fstream>
 #include <string>
-// #include "common_kernels.h"
-// extern "C" void conv_wrap(float* A,float *B, float *H, int hlen, int ylen,int width, int height);
-
-#define KERNEL_LENGTH 2
-__constant__ float c_Kernel[KERNEL_LENGTH];
-
-extern "C" void setConvolutionKernel(float *h_Kernel) {
-  cudaMemcpyToSymbol(c_Kernel, h_Kernel, KERNEL_LENGTH * sizeof(float));
-}
-__global__ void conv(float* A,float *B, float *H, int hlen, int ylen,int width, int height, int lb, int span) {
-  int col = blockIdx.x * blockDim.x + threadIdx.x;
-  // int row = blockIdx.y * blockDim.y + threadIdx.y;
-  int i = col;
-  if (col < ylen && col >= lb * width) {
-    float sum = 0.0f;
-    for (int j = 0; j < hlen; j++) {
-      if (i-j*width < 0)
-        break;
-      sum = sum + (float) H[j] * A[i - j * width];
-    }
-    B[i] = sum;
-  }
-}
-
-__global__ void const_conv(float* A,float *B, int ylen,int width, int height) {
-  int col = blockIdx.x * blockDim.x + threadIdx.x;
-  // int row = blockIdx.y * blockDim.y + threadIdx.y;
-  int i = col;
-  if (col < ylen) {
-    float sum = 0.0f;
-    for (int j = 0; j < KERNEL_LENGTH; j++) {
-      if (i-j*width < 0)break;
-      sum = sum + (float) c_Kernel[j] * A[i - j * width];
-    }
-    B[col] += sum;
-  }
-}
-
-extern "C" void conv_wrap(float* A,float *B, float *H, int hlen, int ylen,int width, int height,int lb,int span) {
-  int threads = min(1024,(height + height%32));
-  int off_t = 0;
-  if (threads == 1024) {
-    off_t = height - threads;
-  }
-
-  // int blocks = ceil(ylen / min(height, threads))
-  conv<<<(width+off_t+width%32),min(1024,(height + height%32))>>>(A,B,H, hlen, ylen,width,height,lb,span);
-}
-extern "C" void const_conv_wrap(float* A,float *B, int ylen,int width, int height) {
-  const_conv<<<(width+width%32),min(1024,(height + (32 - height%32)))>>>(A,B, ylen,width,height);
-}
-
+#include "common_kernels.h"
 
 void cpu_convolve(float *A, float *B, float *H, int hlen, int ylen, int width, int height,int lb=0,int span=0) {
   for (int r = 0; r < width; r++) {
@@ -219,20 +168,7 @@ int main(int argc, char** argv) {
   float* output_buffer = (float *)malloc(bytes * sizeof(float));
   for (int i = 0; i < count; i++) {
     cudaMemcpy(A_gpu, &(databuf[i * ylen]), w * h * sizeof(float), cudaMemcpyHostToDevice);
-      
-    // return 0;
-    // setConvolutionKernel(gaussian);
-    // A = (float *)malloc(w * h * sizeof(float));
 
-
-
-    // cudaMalloc((void **) &H_gpu, flen * sizeof(float));
-
-
-    // cudaMemcpy(H_gpu, H, flen * sizeof(float), cudaMemcpyHostToDevice);
-  //}
-
-    // for (int i = 0; i < 10; i++) {
     float* stages[3] = {blur_gpu,deriv_gpu,mean_gpu};
     int flens[3] = {9,2,9};
     int windowing[3] = {0,0,0};
@@ -243,19 +179,12 @@ int main(int argc, char** argv) {
       int flen = flens[j];
       float* Hgpu = stages[j];
       conv_wrap(A_gpu,B_gpu,Hgpu, flen, ylen,w,h,lb,span);
-      if (j < 2)
+      if (j < 2) {
         hold = A_gpu;
         A_gpu = B_gpu;
         B_gpu = hold;
+      }
     }
-    cudaDeviceSynchronize();
-    // checkCudaErrors(cudaDeviceSynchronize());
-    // sdkResetTimer(&hTimer);
-    // sdkStartTimer(&hTimer);
-    // cpu_convolve(A,B_cpu,H, flen, ylen,w,h);
-    // sdkStopTimer(&hTimer);
-    // sdkGetTimerValue(&hTimer);
-    // printf("CPU Convolve: %.5fmsec\n",(float)sdkGetTimerValue(&hTimer));
 
     cudaMemcpy(&output_buffer[i * ylen], B_gpu, w * h * sizeof(float), cudaMemcpyDeviceToHost);
   }
