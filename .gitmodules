@@ -1,0 +1,3 @@
+[submodule "src/pybind11-cuda"]
+	path = src/pybind11-cuda
+	url = git@github.com:DoYouEvenStackSmash/pybind11-cuda.git
